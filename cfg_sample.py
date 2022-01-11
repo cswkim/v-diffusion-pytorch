@@ -25,7 +25,7 @@ def parse_prompt(prompt, default_weight=3.):
         vals = prompt.rsplit(':', 2)
         vals = [vals[0] + ':' + vals[1], *vals[2:]]
     else:
-        vals = prompt.rsplit(':', 1)
+        vals = [prompt]
     vals = vals + ['', default_weight][len(vals):]
     return vals[0], float(vals[1])
 
@@ -142,7 +142,7 @@ def main():
             cur_batch_size = min(n - i, batch_size)
             outs = run(x[i:i+cur_batch_size], steps)
             for j, out in enumerate(outs):
-                utils.to_pil_image(out).save(f'out_{i + j:05}.png')
+                utils.to_pil_image(out).save(f'obj_diff_pytorch_{i + j:05}.png')
 
     try:
         run_all(args.n, args.batch_size)
