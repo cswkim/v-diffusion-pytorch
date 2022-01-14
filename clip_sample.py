@@ -5,6 +5,7 @@
 import argparse
 from functools import partial
 from pathlib import Path
+from typing import List, Tuple
 
 from PIL import Image
 import torch
@@ -64,11 +65,11 @@ def resize_and_center_crop(image, size):
     return TF.center_crop(image, size[::-1])
 
 
-def main(prompts: list[str] = [], image_prompts: list[str] = [], batch_size: int = 1,
+def main(prompts: List[str] = [], image_prompts: List[str] = [], batch_size: int = 1,
          checkpoint: str = None, clip_guidance_scale: float = 500., cutn: int = 16,
          cut_pow: float = 1., device_name: str = None, eta: float = 1., init_image: str = None,
          model_name: str = 'cc12m_1', num_samples: int = 1, seed: int = 0,
-         size: tuple[int, int] = (256, 256), start_timestep: float = 0.9, num_steps: int = 1000):
+         size: Tuple[int, int] = (256, 256), start_timestep: float = 0.9, num_steps: int = 1000):
     if device_name:
         device = torch.device(device_name)
     else:
