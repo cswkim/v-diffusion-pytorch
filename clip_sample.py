@@ -64,56 +64,24 @@ def resize_and_center_crop(image, size):
     return TF.center_crop(image, size[::-1])
 
 
-def main():
-    p = argparse.ArgumentParser(description=__doc__,
-                                formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-    p.add_argument('prompts', type=str, default=[], nargs='*',
-                   help='the text prompts to use')
-    p.add_argument('--images', type=str, default=[], nargs='*', metavar='IMAGE',
-                   help='the image prompts')
-    p.add_argument('--batch-size', '-bs', type=int, default=1,
-                   help='the number of images per batch')
-    p.add_argument('--checkpoint', type=str,
-                   help='the checkpoint to use')
-    p.add_argument('--clip-guidance-scale', '-cs', type=float, default=500.,
-                   help='the CLIP guidance scale')
-    p.add_argument('--cutn', type=int, default=16,
-                   help='the number of random crops to use')
-    p.add_argument('--cut-pow', type=float, default=1.,
-                   help='the random crop size power')
-    p.add_argument('--device', type=str,
-                   help='the device to use')
-    p.add_argument('--eta', type=float, default=1.,
-                   help='the amount of noise to add during sampling (0-1)')
-    p.add_argument('--init', type=str,
-                   help='the init image')
-    p.add_argument('--model', type=str, default='cc12m_1', choices=get_models(),
-                   help='the model to use')
-    p.add_argument('-n', type=int, default=1,
-                   help='the number of images to sample')
-    p.add_argument('--seed', type=int, default=0,
-                   help='the random seed')
-    p.add_argument('--size', type=int, nargs=2,
-                   help='the output image size')
-    p.add_argument('--starting-timestep', '-st', type=float, default=0.9,
-                   help='the timestep to start at (used with init images)')
-    p.add_argument('--steps', type=int, default=1000,
-                   help='the number of timesteps')
-    args = p.parse_args()
-
-    if args.device:
-        device = torch.device(args.device)
+def main(prompts: list[str] = [], image_prompts: list[str] = [], batch_size: int = 1,
+         checkpoint: str = None, clip_guidance_scale: float = 500., cutn: int = 16,
+         cut_pow: float = 1., device_name: str = None, eta: float = 1., init_image: str = None,
+         model_name: str = 'cc12m_1', num_samples: int = 1, seed: int = 0,
+         size: tuple[int, int] = (256, 256), start_timestep: float = 0.9, num_steps: int = 1000):
+    if device_name:
+        device = torch.device(device_name)
     else:
         device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
     print('Using device:', device)
 
-    model = get_model(args.model)()
+    model = get_model(model_name)()
     _, side_y, side_x = model.shape
-    if args.size:
-        side_x, side_y = args.size
-    checkpoint = args.checkpoint
+    if size:
+        side_x, side_y = size
+
     if not checkpoint:
-        checkpoint = MODULE_DIR / f'checkpoints/{args.model}.pth'
+        checkpoint = MODULE_DIR / f'checkpoints/{model_name}.pth'
     model.load_state_dict(torch.load(checkpoint, map_location='cpu'))
     if device.type == 'cuda':
         model = model.half()
@@ -123,21 +91,21 @@ def main():
     clip_model.eval().requires_grad_(False)
     normalize = transforms.Normalize(mean=[0.48145466, 0.4578275, 0.40821073],
                                      std=[0.26862954, 0.26130258, 0.27577711])
-    make_cutouts = MakeCutouts(clip_model.visual.input_resolution, args.cutn, args.cut_pow)
+    make_cutouts = MakeCutouts(clip_model.visual.input_resolution, cutn, cut_pow)
 
-    if args.init:
-        init = Image.open(utils.fetch(args.init)).convert('RGB')
+    if init_image:
+        init = Image.open(utils.fetch(init_image)).convert('RGB')
         init = resize_and_center_crop(init, (side_x, side_y))
-        init = utils.from_pil_image(init).to(device)[None].repeat([args.n, 1, 1, 1])
+        init = utils.from_pil_image(init).to(device)[None].repeat([num_samples, 1, 1, 1])
 
     target_embeds, weights = [], []
 
-    for prompt in args.prompts:
+    for prompt in prompts:
         txt, weight = parse_prompt(prompt)
         target_embeds.append(clip_model.encode_text(clip.tokenize(txt).to(device)).float())
         weights.append(weight)
 
-    for prompt in args.images:
+    for prompt in image_prompts:
         path, weight = parse_prompt(prompt)
         img = Image.open(utils.fetch(path)).convert('RGB')
         img = TF.resize(img, min(side_x, side_y, *img.size),
@@ -145,7 +113,7 @@ def main():
         batch = make_cutouts(TF.to_tensor(img)[None].to(device))
         embeds = F.normalize(clip_model.encode_image(normalize(batch)).float(), dim=-1)
         target_embeds.append(embeds)
-        weights.extend([weight / args.cutn] * args.cutn)
+        weights.extend([weight / cutn] * cutn)
 
     if not target_embeds:
         raise RuntimeError('At least one text or image prompt must be specified.')
@@ -156,15 +124,15 @@ def main():
     weights /= weights.sum().abs()
 
     clip_embed = F.normalize(target_embeds.mul(weights[:, None]).sum(0, keepdim=True), dim=-1)
-    clip_embed = clip_embed.repeat([args.n, 1])
+    clip_embed = clip_embed.repeat([num_samples, 1])
 
-    torch.manual_seed(args.seed)
+    torch.manual_seed(seed)
 
     def cond_fn(x, t, pred, clip_embed):
         clip_in = normalize(make_cutouts((pred + 1) / 2))
-        image_embeds = clip_model.encode_image(clip_in).view([args.cutn, x.shape[0], -1])
+        image_embeds = clip_model.encode_image(clip_in).view([cutn, x.shape[0], -1])
         losses = spherical_dist_loss(image_embeds, clip_embed[None])
-        loss = losses.mean(0).sum() * args.clip_guidance_scale
+        loss = losses.mean(0).sum() * clip_guidance_scale
         grad = -torch.autograd.grad(loss, x)[0]
         return grad
 
@@ -175,16 +143,16 @@ def main():
         else:
             extra_args = {}
             cond_fn_ = partial(cond_fn, clip_embed=clip_embed)
-        if not args.clip_guidance_scale:
-            return sampling.sample(model, x, steps, args.eta, extra_args)
-        return sampling.cond_sample(model, x, steps, args.eta, extra_args, cond_fn_)
+        if not clip_guidance_scale:
+            return sampling.sample(model, x, steps, eta, extra_args)
+        return sampling.cond_sample(model, x, steps, eta, extra_args, cond_fn_)
 
     def run_all(n, batch_size):
         x = torch.randn([n, 3, side_y, side_x], device=device)
-        t = torch.linspace(1, 0, args.steps + 1, device=device)[:-1]
+        t = torch.linspace(1, 0, num_steps + 1, device=device)[:-1]
         steps = utils.get_spliced_ddpm_cosine_schedule(t)
-        if args.init:
-            steps = steps[steps < args.starting_timestep]
+        if init_image:
+            steps = steps[steps < start_timestep]
             alpha, sigma = utils.t_to_alpha_sigma(steps[0])
             x = init * alpha + x * sigma
         for i in trange(0, n, batch_size):
@@ -194,7 +162,7 @@ def main():
                 utils.to_pil_image(out).save(f'obj_diff_pytorch_{i + j:05}.png')
 
     try:
-        run_all(args.n, args.batch_size)
+        run_all(num_samples, batch_size)
     except KeyboardInterrupt:
         pass
 
