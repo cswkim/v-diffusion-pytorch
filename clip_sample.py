@@ -160,7 +160,7 @@ def main(prompts: List[str] = [], image_prompts: List[str] = [], batch_size: int
             cur_batch_size = min(n - i, batch_size)
             outs = run(x[i:i+cur_batch_size], steps, clip_embed[i:i+cur_batch_size])
             for j, out in enumerate(outs):
-                utils.to_pil_image(out).save(f'obj_diff_pytorch_{cutn}_{i + j:05}.png')
+                utils.to_pil_image(out).save(f'obj_diff_pytorch_{i + j:05}.png')
 
     try:
         run_all(num_samples, batch_size)
